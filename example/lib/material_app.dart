@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_typeahead/flutter_typeahead.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_bloc_typeahead/flutter_bloc_typeahead.dart';
 
 import 'package:example/data.dart';
 
@@ -27,10 +28,25 @@ class MyHomePage extends StatelessWidget {
             ]),
           ),
           body: TabBarView(children: [
-            NavigationExample(),
+            BlocProvider(
+              builder: (context) => MyBackendSuggestionBloc(),
+              child: NavigationExample(),
+            ),
             FormExample(),
             ScrollExample(),
           ])),
+    );
+  }
+}
+
+class MyBackendSuggestionBloc extends SuggestionBloc<dynamic> {
+  @override
+  Stream<SuggestionState<dynamic>> mapEventToState(
+    LoadSuggestions event,
+  ) async* {
+    await Future.delayed(Duration(seconds: 1));
+    yield LoadedSuggestionState(
+      await BackendService.getSuggestions(event.pattern),
     );
   }
 }
@@ -55,9 +71,7 @@ class NavigationExample extends StatelessWidget {
                   border: OutlineInputBorder(),
                   hintText: 'What are you looking for?'),
             ),
-            suggestionsCallback: (pattern) async {
-              return await BackendService.getSuggestions(pattern);
-            },
+            suggestionBloc: BlocProvider.of<MyBackendSuggestionBloc>(context),
             itemBuilder: (context, suggestion) {
               return ListTile(
                 leading: Icon(Icons.shopping_cart),
@@ -81,9 +95,22 @@ class FormExample extends StatefulWidget {
   _FormExampleState createState() => _FormExampleState();
 }
 
+class MyCitySuggestionBloc extends SuggestionBloc<String> {
+  @override
+  Stream<SuggestionState<String>> mapEventToState(
+    LoadSuggestions event,
+  ) async* {
+    await Future.delayed(Duration(seconds: 1));
+    yield LoadedSuggestionState(
+      await CitiesService.getSuggestions(event.pattern),
+    );
+  }
+}
+
 class _FormExampleState extends State<FormExample> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _typeAheadController = TextEditingController();
+  final MyCitySuggestionBloc _citySuggestionBloc = MyCitySuggestionBloc();
 
   String _selectedCity;
 
@@ -101,9 +128,7 @@ class _FormExampleState extends State<FormExample> {
                 decoration: InputDecoration(labelText: 'City'),
                 controller: this._typeAheadController,
               ),
-              suggestionsCallback: (pattern) {
-                return CitiesService.getSuggestions(pattern);
-              },
+              suggestionBloc: _citySuggestionBloc,
               itemBuilder: (context, suggestion) {
                 return ListTile(
                   title: Text(suggestion),
@@ -119,6 +144,7 @@ class _FormExampleState extends State<FormExample> {
                 if (value.isEmpty) {
                   return 'Please select a city';
                 }
+                return null;
               },
               onSaved: (value) => this._selectedCity = value,
             ),
@@ -132,13 +158,29 @@ class _FormExampleState extends State<FormExample> {
                   this._formKey.currentState.save();
                   Scaffold.of(context).showSnackBar(SnackBar(
                       content:
-                      Text('Your Favorite City is ${this._selectedCity}')));
+                          Text('Your Favorite City is ${this._selectedCity}')));
                 }
               },
             )
           ],
         ),
       ),
+    );
+  }
+}
+
+class MySuggestionBloc extends SuggestionBloc<String> {
+  final List<String> items = List.generate(5, (index) => "Item $index");
+  @override
+  Stream<SuggestionState<String>> mapEventToState(
+    LoadSuggestions event,
+  ) async* {
+    await Future.delayed(Duration(seconds: 1));
+    yield LoadedSuggestionState(
+      items
+          .where((item) =>
+              item.toLowerCase().startsWith(event.pattern.toLowerCase()))
+          .toList(),
     );
   }
 }
@@ -151,9 +193,9 @@ class ScrollExample extends StatelessWidget {
     return ListView(children: [
       Center(
           child: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text("Suggestion box will resize when scrolling"),
-          )),
+        padding: const EdgeInsets.all(8.0),
+        child: Text("Suggestion box will resize when scrolling"),
+      )),
       SizedBox(height: 200),
       TypeAheadField<String>(
         getImmediateSuggestions: true,
@@ -162,12 +204,7 @@ class ScrollExample extends StatelessWidget {
               border: OutlineInputBorder(),
               hintText: 'What are you looking for?'),
         ),
-        suggestionsCallback: (String pattern) async {
-          return items
-              .where((item) =>
-              item.toLowerCase().startsWith(pattern.toLowerCase()))
-              .toList();
-        },
+        suggestionBloc: MySuggestionBloc(),
         itemBuilder: (context, String suggestion) {
           return ListTile(
             title: Text(suggestion),

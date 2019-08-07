@@ -1,4 +1,4 @@
-name: flutter_typeahead
+name: flutter_bloc_typeahead
 version: 1.6.1
 
 description: A highly customizable typeahead (autocomplete) text input field for Flutter
@@ -12,6 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   keyboard_visibility: ^0.5.1
+  bloc: ^0.14.0
 
 dev_dependencies:
   flutter_test:

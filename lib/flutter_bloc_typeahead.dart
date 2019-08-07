@@ -229,11 +229,42 @@ library flutter_typeahead;
 import 'dart:async';
 import 'dart:math';
 
+import 'package:bloc/bloc.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:keyboard_visibility/keyboard_visibility.dart';
 
-typedef FutureOr<List<T>> SuggestionsCallback<T>(String pattern);
+class LoadSuggestions {
+  final String pattern;
+
+  LoadSuggestions(this.pattern);
+}
+
+abstract class SuggestionState<T> {}
+
+class InitialSuggestionState<T> extends SuggestionState<T> {}
+
+class LoadingSuggestionState<T> extends SuggestionState<T> {}
+
+class LoadedSuggestionState<T> extends SuggestionState<T> {
+  final List<T> suggestions;
+
+  LoadedSuggestionState(this.suggestions);
+}
+
+class ErrorSuggestionState extends SuggestionState {
+  String error;
+
+  ErrorSuggestionState(this.error);
+}
+
+abstract class SuggestionBloc<T>
+    extends Bloc<LoadSuggestions, SuggestionState<T>> {
+  @override
+  SuggestionState<T> get initialState => InitialSuggestionState<T>();
+}
+
+typedef Stream<List<T>> SuggestionsCallback<T>(String pattern);
 typedef Widget ItemBuilder<T>(BuildContext context, T itemData);
 typedef void SuggestionSelectionCallback<T>(T suggestion);
 typedef Widget ErrorBuilder(BuildContext context, Object error);
@@ -271,7 +302,7 @@ class TypeAheadFormField<T> extends FormField<String> {
       SuggestionsBoxController suggestionsBoxController,
       @required SuggestionSelectionCallback<T> onSuggestionSelected,
       @required ItemBuilder<T> itemBuilder,
-      @required SuggestionsCallback<T> suggestionsCallback,
+      @required SuggestionBloc<T> suggestionBloc,
       double suggestionsBoxVerticalOffset: 5.0,
       this.textFieldConfiguration: const TextFieldConfiguration(),
       AnimationTransitionBuilder transitionBuilder,
@@ -319,7 +350,7 @@ class TypeAheadFormField<T> extends FormField<String> {
                 suggestionsBoxVerticalOffset: suggestionsBoxVerticalOffset,
                 onSuggestionSelected: onSuggestionSelected,
                 itemBuilder: itemBuilder,
-                suggestionsCallback: suggestionsCallback,
+                suggestionBloc: suggestionBloc,
                 animationStart: animationStart,
                 animationDuration: animationDuration,
                 direction: direction,
@@ -433,7 +464,7 @@ class TypeAheadField<T> extends StatefulWidget {
   ///   return await _getSuggestions(pattern);
   /// }
   /// ```
-  final SuggestionsCallback<T> suggestionsCallback;
+  final SuggestionBloc<T> suggestionBloc;
 
   /// Called when a suggestion is tapped.
   ///
@@ -662,7 +693,7 @@ class TypeAheadField<T> extends StatefulWidget {
   /// Creates a [TypeAheadField]
   TypeAheadField(
       {Key key,
-      @required this.suggestionsCallback,
+      @required this.suggestionBloc,
       @required this.itemBuilder,
       @required this.onSuggestionSelected,
       this.textFieldConfiguration: const TextFieldConfiguration(),
@@ -685,7 +716,7 @@ class TypeAheadField<T> extends StatefulWidget {
       this.keepSuggestionsOnLoading: true,
       this.keepSuggestionsOnSuggestionSelected: false,
       this.autoFlipDirection: false})
-      : assert(suggestionsCallback != null),
+      : assert(suggestionBloc != null),
         assert(itemBuilder != null),
         assert(onSuggestionSelected != null),
         assert(animationStart != null &&
@@ -826,7 +857,7 @@ class _TypeAheadFieldState<T> extends State<TypeAheadField<T>>
         noItemsFoundBuilder: widget.noItemsFoundBuilder,
         errorBuilder: widget.errorBuilder,
         transitionBuilder: widget.transitionBuilder,
-        suggestionsCallback: widget.suggestionsCallback,
+        suggestionBloc: widget.suggestionBloc,
         animationDuration: widget.animationDuration,
         animationStart: widget.animationStart,
         getImmediateSuggestions: widget.getImmediateSuggestions,
@@ -927,7 +958,7 @@ class _SuggestionsList<T> extends StatefulWidget {
   final TextEditingController controller;
   final bool getImmediateSuggestions;
   final SuggestionSelectionCallback<T> onSuggestionSelected;
-  final SuggestionsCallback<T> suggestionsCallback;
+  final SuggestionBloc<T> suggestionBloc;
   final ItemBuilder<T> itemBuilder;
   final SuggestionsBoxDecoration decoration;
   final Duration debounceDuration;
@@ -948,7 +979,7 @@ class _SuggestionsList<T> extends StatefulWidget {
     this.controller,
     this.getImmediateSuggestions: false,
     this.onSuggestionSelected,
-    this.suggestionsCallback,
+    this.suggestionBloc,
     this.itemBuilder,
     this.decoration,
     this.debounceDuration,
@@ -978,11 +1009,38 @@ class _SuggestionsListState<T> extends State<_SuggestionsList<T>>
   Object _error;
   AnimationController _animationController;
   String _lastTextValue;
-  Object _activeCallbackIdentity;
 
   @override
   void initState() {
     super.initState();
+
+    widget.suggestionBloc.state.listen((state) {
+      if (state is LoadingSuggestionState) {
+        this._isLoading = true;
+        this._error = null;
+      } else if (state is LoadedSuggestionState) {
+        this._isLoading = false;
+        this._error = null;
+        this._suggestions = (state as LoadedSuggestionState).suggestions;
+      } else if (state is ErrorSuggestionState) {
+        this._isLoading = false;
+        this._error = (state as ErrorSuggestionState).error;
+        this._suggestions = null;
+      }
+
+      if (this.mounted) {
+        // if it wasn't removed in the meantime
+        setState(() {
+          double animationStart = widget.animationStart;
+          if (_suggestions == null ||
+              _suggestions.length == 0 ||
+              _error != null) {
+            animationStart = 1.0;
+          }
+          this._animationController.forward(from: animationStart);
+        });
+      }
+    });
 
     this._animationController = AnimationController(
       vsync: this,
@@ -1012,10 +1070,10 @@ class _SuggestionsListState<T> extends State<_SuggestionsList<T>>
           return;
         }
 
-        await this._getSuggestions();
+        this._getSuggestions();
         while (_isQueued) {
           _isQueued = false;
-          await this._getSuggestions();
+          this._getSuggestions();
         }
       });
     };
@@ -1023,52 +1081,15 @@ class _SuggestionsListState<T> extends State<_SuggestionsList<T>>
     widget.controller.addListener(this._controllerListener);
   }
 
-  Future<void> _getSuggestions() async {
-    if (mounted) {
-      setState(() {
-        this._animationController.forward(from: 1.0);
-
-        this._isLoading = true;
-        this._error = null;
-      });
-
-      List<T> suggestions = [];
-      Object error;
-
-      final Object callbackIdentity = Object();
-      this._activeCallbackIdentity = callbackIdentity;
-
-      try {
-        suggestions = await widget.suggestionsCallback(widget.controller.text);
-      } catch (e) {
-        error = e;
-      }
-
-      // If another callback has been issued, omit this one
-      if (this._activeCallbackIdentity != callbackIdentity) return;
-
-      if (this.mounted) {
-        // if it wasn't removed in the meantime
-        setState(() {
-          double animationStart = widget.animationStart;
-          if (error != null || suggestions == null || suggestions.length == 0) {
-            animationStart = 1.0;
-          }
-          this._animationController.forward(from: animationStart);
-
-          this._error = error;
-          this._isLoading = false;
-          this._suggestions = suggestions;
-        });
-      }
-    }
+  void _getSuggestions() {
+    widget.suggestionBloc.dispatch(LoadSuggestions(widget.controller.text));
   }
 
   @override
   void dispose() {
     _animationController.dispose();
-    super.dispose();
     widget.controller.removeListener(this._controllerListener);
+    super.dispose();
   }
 
   @override

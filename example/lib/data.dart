@@ -2,8 +2,6 @@ import 'dart:math';
 
 class BackendService {
   static Future<List> getSuggestions(String query) async {
-    await Future.delayed(Duration(seconds: 1));
-
     return List.generate(3, (index) {
       return {'name': query + index.toString(), 'price': Random().nextInt(100)};
     });
@@ -27,7 +25,7 @@ class CitiesService {
     'Sydney',
   ];
 
-  static List<String> getSuggestions(String query) {
+  static Future<List<String>> getSuggestions(String query) async {
     List<String> matches = List();
     matches.addAll(cities);
 
